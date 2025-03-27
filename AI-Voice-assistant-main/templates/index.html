@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Voice Chat</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f5f7fa;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+        #chat-container {
+            width: 100%;
+            max-width: 600px;
+            height: 60vh;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+            display: flex;
+            flex-direction: column;
+        }
+        .message {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 18px;
+            margin: 8px 0;
+            line-height: 1.4;
+            word-wrap: break-word;
+        }
+        .assistant {
+            background-color: #3f51b5;
+            color: white;
+            align-self: flex-start;
+            border-bottom-left-radius: 4px;
+        }
+        .user {
+            background-color: #eef2f7;
+            color: #333;
+            align-self: flex-end;
+            border-bottom-right-radius: 4px;
+        }
+        .status {
+            color: #757575;
+            font-style: italic;
+            text-align: center;
+            margin: 8px 0;
+        }
+        .error {
+            background-color: #ffebee;
+            color: #d32f2f;
+            text-align: center;
+            border-radius: 8px;
+        }
+        .controls {
+            display: flex;
+            gap: 12px;
+            margin-top: 15px;
+        }
+        button {
+            background-color: #3f51b5;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            cursor: pointer;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 500;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        button:hover {
+            background-color: #303f9f;
+            transform: translateY(-2px);
+        }
+        button:disabled {
+            background-color: #b0bec5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        #stopButton {
+            background-color: #f44336;
+        }
+        #stopButton:hover {
+            background-color: #d32f2f;
+        }
+    </style>
+</head>
+<body>
+    <h1>AI Voice Chat</h1>
+    <div id="chat-container"></div>
+    <div class="controls">
+        <button id="startButton" onclick="startConversation()">🎤 Start Chat</button>
+        <button id="stopButton" onclick="stopConversation()" disabled>⏹️ Stop</button>
+    </div>
+
+    <script>
+        const state = {
+            active: false,
+            listening: false
+        };
+
+        // DOM elements
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const chatContainer = document.getElementById('chat-container');
+
+        function appendMessage(text, type = 'assistant') {
+            const messageElement = document.createElement('div');
+            messageElement.className = `message ${type}`;
+            messageElement.textContent = text;
+            chatContainer.appendChild(messageElement);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function appendStatus(text) {
+            const statusElement = document.createElement('div');
+            statusElement.className = 'status';
+            statusElement.textContent = text;
+            chatContainer.appendChild(statusElement);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function speak(text) {
+            return new Promise((resolve) => {
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.onend = resolve;
+                window.speechSynthesis.speak(utterance);
+            });
+        }
+
+        function toggleUIState(active) {
+            state.active = active;
+            startButton.disabled = active;
+            stopButton.disabled = !active;
+        }
+
+        async function startConversation() {
+            if (state.active) return;
+            
+            try {
+                // Check microphone permissions
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                stream.getTracks().forEach(track => track.stop());
+                
+                toggleUIState(true);
+                appendMessage("Starting conversation...", "assistant");
+                
+                // Get AI's first message
+                const response = await fetch('/first_message');
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    appendMessage(`AI: ${data.ai_message}`, 'assistant');
+                    await speak(data.ai_message);
+                    listenForUser();
+                } else {
+                    appendMessage(data.message, 'error');
+                    toggleUIState(false);
+                }
+            } catch (error) {
+                appendMessage('Microphone access denied. Please allow permissions.', 'error');
+                toggleUIState(false);
+            }
+        }
+
+        async function listenForUser() {
+            if (!state.active) return;
+            
+            state.listening = true;
+            appendStatus("🎤 Listening for your response...");
+            
+            try {
+                const response = await fetch('/voice', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    appendMessage(`You: ${data.user_message}`, 'user');
+                    appendMessage(`AI: ${data.ai_message}`, 'assistant');
+                    await speak(data.ai_message);
+                    listenForUser(); // Continue conversation
+                } else {
+                    appendMessage(data.message, 'error');
+                    if (state.active) {
+                        setTimeout(listenForUser, 1000); // Retry after error
+                    }
+                }
+            } catch (error) {
+                appendMessage('Network error occurred', 'error');
+                if (state.active) {
+                    setTimeout(listenForUser, 1000); // Retry after error
+                }
+            } finally {
+                state.listening = false;
+            }
+        }
+
+        function stopConversation() {
+            if (!state.active) return;
+            
+            window.speechSynthesis.cancel();
+            state.active = false;
+            state.listening = false;
+            toggleUIState(false);
+            appendMessage("Conversation ended", "assistant");
+        }
+    </script>
+</body>
+</html>
